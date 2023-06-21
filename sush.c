@@ -24,7 +24,6 @@ int countch(const char *str, const char ch)
 int urlcmp(const char *url, const char *cmp)
 {
     char *tmp = (char *)url;
-    int pos;
 
     for (; *tmp != '\0'; tmp++) {
         if (*tmp == '?') {
@@ -41,16 +40,49 @@ int urlcmp(const char *url, const char *cmp)
 
 int db_checkid(struct sqlite3 *db, const char *id)
 {
-    int ret = 0;
     struct sqlite3_stmt *st = NULL;
 
-    sqlite3_prepare_v2(db, "SELECT 1 FROM " DB_TABLE " WHERE id = ?", -1, &st, NULL);
+    sqlite3_prepare_v2(db, "SELECT 1 FROM " URL_TABLE " WHERE id = ?", -1, &st, NULL);
     sqlite3_bind_text(st, 1, id, strlen(id), SQLITE_TRANSIENT);
-    ret = sqlite3_step(st) == SQLITE_ROW;
+    int ret = sqlite3_step(st) == SQLITE_ROW;
     sqlite3_finalize(st);
 
     return ret;
 }
+
+int db_checkkey(struct sqlite3 *db, const char *key)
+{
+    struct sqlite3_stmt *st = NULL;
+
+    sqlite3_prepare_v2(db, "SELECT 1 FROM " KEY_TABLE " WHERE key = ?", -1, &st, NULL);
+    sqlite3_bind_text(st, 1, key, strlen(key), SQLITE_TRANSIENT);
+    int ret = sqlite3_step(st) == SQLITE_ROW;
+    sqlite3_finalize(st);
+
+    return ret;
+}
+
+int simple_response(struct MHD_Connection *conn, unsigned int status, size_t size, void *data)
+{
+    if (conn == NULL) {
+        fprintf(stderr, "[ERR] simple_respones: connection is null\n");
+        return MHD_NO;
+    }
+
+    struct MHD_Response *resp = MHD_create_response_from_buffer(size, data, MHD_RESPMEM_PERSISTENT);
+    if (resp == NULL) {
+        fprintf(stderr, "[ERR] simple_response: failed to create response\n");
+    }
+
+    int ret = MHD_queue_response(conn, status, resp);
+    if (ret == MHD_NO) {
+        fprintf(stderr, "[ERR] simple_response: failed to queue response\n");
+    }
+
+    MHD_destroy_response(resp);
+    return ret;
+}
+#define blank_response(conn, status) simple_response(conn, status, 0, NULL);
 
 static enum MHD_Result sush_handler(void *cls,
                                     struct MHD_Connection *conn,
@@ -83,13 +115,30 @@ static enum MHD_Result sush_handler(void *cls,
         // POSTing
 
         if (*data_size == 0) {
-            return MHD_NO;
+            return blank_response(conn, MHD_HTTP_BAD_REQUEST);
         }
 
+        // TODO: figure out why we can't queue responses from within this 'if' block
         if (strcmp(url, "/s") == 0) {
             if (*data_size > MAX_DATA_SIZE) {
-                return MHD_NO;
+                return blank_response(conn, MHD_HTTP_CONTENT_TOO_LARGE);
             }
+
+            const char *auth = MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Authorization");
+            if (auth == NULL) {
+#if DEBUG
+                fprintf(stderr, "[DBG] client did not set auth header\n");
+#endif
+                return blank_response(conn, MHD_HTTP_UNAUTHORIZED);
+            }
+
+            if (!db_checkkey(db, auth)) {
+#if DEBUG
+                fprintf(stderr, "[DBG] client tried to use unknown key!\n");
+#endif
+                return blank_response(conn, MHD_HTTP_FORBIDDEN);
+            }
+
             char *instr = malloc(*data_size + 1);
             memcpy(instr, data, *data_size);
             instr[*data_size] = '\0';
@@ -99,17 +148,17 @@ static enum MHD_Result sush_handler(void *cls,
             do {
                 if (attempts > ID_MAX_ATTEMPTS) {
                     fprintf(stderr, "[ERR] Maximum ID attempts reached! Are we out of possible IDs?");
-                    return MHD_NO;
+                    return blank_response(conn, MHD_HTTP_INTERNAL_SERVER_ERROR);
                 }
 
                 for (int i = 0; i < ID_SIZE; i++) {
-                    id[i] = ID_CHARS[rand() % sizeof(ID_CHARS)];
+                    id[i] = VALID_CHARS[rand() % sizeof(VALID_CHARS)];
                 }
                 id[ID_SIZE] = '\0';
                 attempts++;
             } while (db_checkid(db, id));
 
-            sqlite3_prepare_v2(db, "INSERT INTO " DB_TABLE " VALUES (?, ?)", -1, &st, NULL);
+            sqlite3_prepare_v2(db, "INSERT INTO " URL_TABLE " VALUES (?, ?)", -1, &st, NULL);
             sqlite3_bind_text(st, 1, id, ID_SIZE, SQLITE_TRANSIENT);
             sqlite3_bind_text(st, 2, instr, *data_size, SQLITE_TRANSIENT);
             if (sqlite3_step(st) == SQLITE_DONE) {
@@ -135,19 +184,12 @@ static enum MHD_Result sush_handler(void *cls,
         // GETting
 
         if (*data_size != 0) {
-            return MHD_NO;
+            return blank_response(conn, MHD_HTTP_BAD_REQUEST);
         }
 
         if (strcmp(url, "/") == 0) {
             resp = MHD_create_response_from_buffer(strlen(HOME_PAGE), (void *)HOME_PAGE, MHD_RESPMEM_PERSISTENT);
             ret = MHD_queue_response(conn, MHD_HTTP_OK, resp);
-            MHD_destroy_response(resp);
-
-            return ret;
-        } else if (strcmp(url, "/s") == 0) {
-            resp = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
-            MHD_add_response_header(resp, "Location", "https://gnu.org");
-            ret = MHD_queue_response(conn, MHD_HTTP_TEMPORARY_REDIRECT, resp);
             MHD_destroy_response(resp);
 
             return ret;
@@ -161,10 +203,10 @@ static enum MHD_Result sush_handler(void *cls,
                     part[strlen(part)-1] = '\0';
                 }
 
-                sqlite3_prepare_v2(db, "SELECT url FROM " DB_TABLE " WHERE id = ?", -1, &st, NULL);
+                sqlite3_prepare_v2(db, "SELECT url FROM " URL_TABLE " WHERE id = ?", -1, &st, NULL);
                 sqlite3_bind_text(st, 1, part, strlen(part), SQLITE_TRANSIENT);
-                int _c;
-                if ((_c = sqlite3_step(st)) == SQLITE_ROW) {
+                int _c = sqlite3_step(st);
+                if (_c == SQLITE_ROW) {
                     const unsigned char *redir_url = sqlite3_column_text(st, 0);
 
 #if DEBUG

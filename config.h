@@ -21,15 +21,20 @@
         "</body>" \
     "</html>"
 
-#define DB_TABLE "short"
+#define URL_TABLE "urls"
+#define KEY_TABLE "keys"
+
 #define DEBUG 1
 
-static const int PORT = 8744;
-static const int MAX_DATA_SIZE = 1024;
+const int PORT = 8744;
+const int MAX_DATA_SIZE = 1024;
 
-static const int ID_MAX_ATTEMPTS = 250;
-static const int ID_SIZE = 4;
-static const char ID_CHARS[] = {
+const int KEY_SIZE = 8;
+
+const int ID_MAX_ATTEMPTS = 250;
+const int ID_SIZE = 4;
+
+const char VALID_CHARS[] = {
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'

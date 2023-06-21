@@ -1,3 +1,4 @@
 .vim/
 sush
+genkey
 *.sqlite3
